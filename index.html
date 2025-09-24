@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Ljud + Chrome-notiser (demo)</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;margin:24px}
+    .card{max-width:720px;padding:20px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+    button{padding:10px 14px;border-radius:8px;border:1px solid #ddd;background:#f7f7f7;cursor:pointer}
+    button.primary{background:#0b63ff;color:#fff;border-color:transparent}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    small{color:#666}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Ljud + Chrome-notiser — Enkel demo</h1>
+    <p>Den här sidan visar hur du kan spela ett ljud (kräver klick/interaction) och skicka många notiser i Google Chrome (eller andra webbläsare som stödjer Notification API).</p>
+
+    <div style="margin:12px 0">
+      <strong>Status:</strong> <span id="status">Inte klart</span>
+    </div>
+
+    <div class="row" style="margin-bottom:12px">
+      <button id="btn-request">Be om notis-tillåtelse</button>
+      <button id="btn-play">Spela ljud (klick)</button>
+      <button id="btn-start" class="primary">Starta massa notiser</button>
+      <button id="btn-stop">Stoppa notiser</button>
+    </div>
+
+    <p><small>Notera: webbläsare kan <em>begränsa</em> eller blockera upprepade notiser (throttling). För att skicka notiser när sidan är stängd krävs Push API + server och service worker (detta demo visar bara medan sidan är öppen).</small></p>
+
+    <hr>
+    <h3>Inställningar</h3>
+    <label>Intervall mellan notiser (ms): <input id="interval" type="number" value="1500" style="width:120px"></label>
+    <br><label>Antal notiser (0 = oändligt): <input id="count" type="number" value="0" style="width:120px"></label>
+    <br><label>Notis-text: <input id="msg" type="text" value="Hej! Detta är en test-notis" style="width:60%"></label>
+
+    <hr>
+    <h3>Console / log</h3>
+    <pre id="log" style="height:160px;overflow:auto;background:#f5f7fb;padding:10px;border-radius:8px"></pre>
+  </div>
+
+<script>
+// Enkel, kommenterad demo på svenska.
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const btnRequest = document.getElementById('btn-request');
+const btnPlay = document.getElementById('btn-play');
+const btnStart = document.getElementById('btn-start');
+const btnStop = document.getElementById('btn-stop');
+const intervalInput = document.getElementById('interval');
+const countInput = document.getElementById('count');
+const msgInput = document.getElementById('msg');
+
+let notifierInterval = null;
+let sent = 0;
+let audioCtx = null;
+
+function log(...args){
+  const t = new Date().toLocaleTimeString();
+  logEl.textContent += `[${t}] ` + args.join(' ') + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function updateStatus(){
+  statusEl.textContent = `Notis-tillstånd: ${Notification.permission}`;
+}
+
+// Be om notis-tillåtelse
+btnRequest.addEventListener('click', async ()=>{
+  try{
+    const p = await Notification.requestPermission();
+    updateStatus();
+    log('Permission:', p);
+  }catch(e){
+    log('Fel vid begäran:', e);
+  }
+});
+
+// Spela ett kort ljud (Web Audio API) - kräver klick eller användarinteraktion i många webbläsare
+btnPlay.addEventListener('click', ()=>{
+  try{
+    if(!audioCtx){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.2, audioCtx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.4);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start();
+    o.stop(audioCtx.currentTime + 0.45);
+    log('Spelade ljudet.');
+  }catch(e){
+    log('Fel vid ljudspelning:', e);
+  }
+});
+
+// Skapa en bild-data-URL för notis-ikon (liten svg) — så vi inte behöver externa filer
+function makeIconDataUrl(text){
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' fill='#0b63ff'/><text x='50%' y='55%' font-size='64' fill='white' text-anchor='middle' font-family='Arial'>${text}</text></svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+
+function showNotification(body){
+  if(Notification.permission !== 'granted'){
+    log('Kan inte skicka notis — permission är', Notification.permission);
+    return;
+  }
+
+  try{
+    const n = new Notification('Webb-notis', {
+      body,
+      icon: makeIconDataUrl('🔔'),
+      badge: makeIconDataUrl(' '),
+      tag: 'demo-notis' // tag gör så notiser med samma tag kan ersätta varandra i vissa fall
+    });
+    // Klickhantering (exempel)
+    n.onclick = () => { window.focus(); log('Användaren klickade notisen'); };
+
+    // Några browsrar stänger notisen automatiskt. Logga visningstid
+    log('Skickade notis:', body);
+  }catch(e){
+    log('Fel vid skapa Notification:', e);
+  }
+}
+
+// Starta "spam" av notiser
+btnStart.addEventListener('click', ()=>{
+  if(Notification.permission !== 'granted'){
+    log('Be om tillåtelse först!');
+    return;
+  }
+  if(notifierInterval) {
+    log('Notiser redan i gång');
+    return;
+  }
+  sent = 0;
+  const intervalMs = Math.max(50, parseInt(intervalInput.value || '1500'));
+  const maxCount = Math.max(0, parseInt(countInput.value || '0'));
+  const userMsg = msgInput.value || 'Hej från demo';
+
+  notifierInterval = setInterval(()=>{
+    sent += 1;
+    showNotification(`${userMsg} (${sent})`);
+    // spela kort ljud samtidigt så användaren märker det
+    try{ btnPlay.click(); }catch(e){}
+
+    if(maxCount > 0 && sent >= maxCount){
+      clearInterval(notifierInterval);
+      notifierInterval = null;
+      log('Färdigt: skickade', sent, 'notiser');
+    }
+  }, intervalMs);
+
+  log('Startade notifier (intervall', intervalMs, 'ms)');
+});
+
+btnStop.addEventListener('click', ()=>{
+  if(notifierInterval){
+    clearInterval(notifierInterval);
+    notifierInterval = null;
+    log('Stoppade notifierna efter', sent, 'skickade');
+  } else {
+    log('Inga notifier att stoppa');
+  }
+});
+
+// Init
+updateStatus();
+log('Demo redo. Klicka "Be om notis-tillåtelse" och sedan "Starta massa notiser".');
+
+// Tillägg: Kort not om service worker / push
+log('\nNot: För att skicka notiser när sidan är stängd behöver du använda Push API + service worker och en server som skickar push-meddelanden. Jag kan hjälpa till att skapa sådan lösning om du vill.');
+</script>
+</body>
+</html>
